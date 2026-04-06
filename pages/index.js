@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import styles from '../styles/Home.module.css';
 
 const GRID_SIZE = 4;
-const INITIAL_TILE_VALUE = 2;
 
 export default function Home() {
   const [board, setBoard] = useState([]);
@@ -12,14 +11,19 @@ export default function Home() {
   const [nickname, setNickname] = useState('');
   const [leaderboard, setLeaderboard] = useState([]);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
+  const gameStateRef = useRef({ board: [], score: 0, gameStarted: false, gameOver: false });
 
-  // Başlangıçta leaderboard'u yükle
   useEffect(() => {
     loadLeaderboard();
-    initializeBoard();
   }, []);
 
-  // Leaderboard'u localStorage'dan yükle
+  useEffect(() => {
+    gameStateRef.current = { board, score, gameStarted, gameOver };
+  }, [board, score, gameStarted, gameOver]);
+
   const loadLeaderboard = () => {
     const saved = localStorage.getItem('leaderboard');
     if (saved) {
@@ -27,17 +31,13 @@ export default function Home() {
     }
   };
 
-  // Yeni tahtayı başlat
   const initializeBoard = () => {
     const newBoard = Array(GRID_SIZE * GRID_SIZE).fill(0);
     addNewTile(newBoard);
     addNewTile(newBoard);
-    setBoard(newBoard);
-    setScore(0);
-    setGameOver(false);
+    return newBoard;
   };
 
-  // Yeni tile ekle (rastgele konuma)
   const addNewTile = (currentBoard) => {
     const emptyTiles = currentBoard
       .map((tile, index) => (tile === 0 ? index : null))
@@ -50,23 +50,23 @@ export default function Home() {
     currentBoard[randomIndex] = newValue;
   };
 
-  // Oyunu başlat
   const startGame = () => {
     if (nickname.trim() === '') {
       alert('Lütfen bir isim yazınız!');
       return;
     }
+    const newBoard = initializeBoard();
+    setBoard(newBoard);
+    setScore(0);
+    setGameOver(false);
     setGameStarted(true);
     setShowLeaderboard(false);
-    initializeBoard();
   };
 
-  // Oyun bitişinde leaderboard'a ekle
-  const finishGame = () => {
-    const newScore = score;
+  const finishGame = (finalScore) => {
     const newEntry = {
       name: nickname,
-      score: newScore,
+      score: finalScore,
       date: new Date().toLocaleDateString('tr-TR')
     };
 
@@ -75,68 +75,21 @@ export default function Home() {
 
     localStorage.setItem('leaderboard', JSON.stringify(updatedLeaderboard));
     setLeaderboard(updatedLeaderboard);
-    setShowLeaderboard(true);
   };
 
-  // Harita hareketlerini yönet
-  const move = (direction) => {
-    if (!gameStarted || gameOver) return;
-
-    let newBoard = board.map(x => x);
-    let moved = false;
-    let newScore = score;
-
-    if (direction === 'left' || direction === 'right') {
-      for (let i = 0; i < GRID_SIZE; i++) {
-        let row = newBoard.slice(i * GRID_SIZE, (i + 1) * GRID_SIZE);
-        const result = moveRow(row, direction === 'right');
-        newScore += result.scoreDelta;
-        moved = moved || result.moved;
-        for (let j = 0; j < GRID_SIZE; j++) {
-          newBoard[i * GRID_SIZE + j] = result.row[j];
-        }
-      }
-    } else if (direction === 'up' || direction === 'down') {
-      for (let i = 0; i < GRID_SIZE; i++) {
-        let column = [];
-        for (let j = 0; j < GRID_SIZE; j++) {
-          column.push(newBoard[j * GRID_SIZE + i]);
-        }
-        const result = moveRow(column, direction === 'down');
-        newScore += result.scoreDelta;
-        moved = moved || result.moved;
-        for (let j = 0; j < GRID_SIZE; j++) {
-          newBoard[j * GRID_SIZE + i] = result.row[j];
-        }
-      }
-    }
-
-    if (moved) {
-      addNewTile(newBoard);
-      setBoard(newBoard);
-      setScore(newScore);
-
-      if (isGameOver(newBoard)) {
-        setGameOver(true);
-        setTimeout(() => finishGame(), 500);
-      }
-    }
-  };
-
-  // Satırı hareket ettir
   const moveRow = (row, reverse) => {
     if (reverse) row = row.reverse();
 
     let packed = row.filter(val => val !== 0);
     let scoreDelta = 0;
-    let moved = packed.length !== row.filter(val => val !== 0).length;
+    let hasMoved = packed.length !== row.filter(val => val !== 0).length;
 
     for (let i = 0; i < packed.length - 1; i++) {
       if (packed[i] === packed[i + 1]) {
         packed[i] *= 2;
         scoreDelta += packed[i];
         packed.splice(i + 1, 1);
-        moved = true;
+        hasMoved = true;
       }
     }
 
@@ -146,15 +99,12 @@ export default function Home() {
 
     if (reverse) packed = packed.reverse();
 
-    return { row: packed, moved, scoreDelta };
+    return { row: packed, hasMoved, scoreDelta };
   };
 
-  // Oyunun bittimi kontrol et
   const isGameOver = (currentBoard) => {
-    // Boş tile var mı?
     if (currentBoard.some(tile => tile === 0)) return false;
 
-    // Hareket yapılabilir mi?
     for (let i = 0; i < GRID_SIZE; i++) {
       for (let j = 0; j < GRID_SIZE; j++) {
         const index = i * GRID_SIZE + j;
@@ -168,19 +118,112 @@ export default function Home() {
     return true;
   };
 
-  // Klavye kontrolü
+  const move = (direction) => {
+    const state = gameStateRef.current;
+    if (!state.gameStarted || state.gameOver || state.board.length === 0) return;
+
+    let newBoard = state.board.map(x => x);
+    let moved = false;
+    let newScore = state.score;
+
+    if (direction === 'left' || direction === 'right') {
+      for (let i = 0; i < GRID_SIZE; i++) {
+        let row = newBoard.slice(i * GRID_SIZE, (i + 1) * GRID_SIZE);
+        const result = moveRow(row, direction === 'right');
+        newScore += result.scoreDelta;
+        moved = moved || result.hasMoved;
+        for (let j = 0; j < GRID_SIZE; j++) {
+          newBoard[i * GRID_SIZE + j] = result.row[j];
+        }
+      }
+    } else if (direction === 'up' || direction === 'down') {
+      for (let i = 0; i < GRID_SIZE; i++) {
+        let column = [];
+        for (let j = 0; j < GRID_SIZE; j++) {
+          column.push(newBoard[j * GRID_SIZE + i]);
+        }
+        const result = moveRow(column, direction === 'down');
+        newScore += result.scoreDelta;
+        moved = moved || result.hasMoved;
+        for (let j = 0; j < GRID_SIZE; j++) {
+          newBoard[j * GRID_SIZE + i] = result.row[j];
+        }
+      }
+    }
+
+    if (moved) {
+      addNewTile(newBoard);
+      setBoard(newBoard);
+      setScore(newScore);
+
+      if (isGameOver(newBoard)) {
+        setGameOver(true);
+        setTimeout(() => finishGame(newScore), 300);
+      }
+    }
+  };
+
+  // Klavye kontrolü - SABIT!
   useEffect(() => {
     const handleKeyPress = (e) => {
-      if (!gameStarted || gameOver) return;
-      if (e.key === 'ArrowUp') { e.preventDefault(); move('up'); }
-      if (e.key === 'ArrowDown') { e.preventDefault(); move('down'); }
-      if (e.key === 'ArrowLeft') { e.preventDefault(); move('left'); }
-      if (e.key === 'ArrowRight') { e.preventDefault(); move('right'); }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        move('up');
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        move('down');
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        move('left');
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        move('right');
+      }
     };
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [gameStarted, gameOver, board, score]);
+  }, []);
+
+  // Touch kontrolü (MOBİL) - YENİ!
+  useEffect(() => {
+    const handleTouchStart = (e) => {
+      touchStartX.current = e.touches[0].clientX;
+      touchStartY.current = e.touches[0].clientY;
+    };
+
+    const handleTouchEnd = (e) => {
+      const touchEndX = e.changedTouches[0].clientX;
+      const touchEndY = e.changedTouches[0].clientY;
+
+      const diffX = touchStartX.current - touchEndX;
+      const diffY = touchStartY.current - touchEndY;
+
+      const threshold = 50;
+
+      if (Math.abs(diffX) > Math.abs(diffY)) {
+        if (diffX > threshold) {
+          move('left');
+        } else if (diffX < -threshold) {
+          move('right');
+        }
+      } else {
+        if (diffY > threshold) {
+          move('up');
+        } else if (diffY < -threshold) {
+          move('down');
+        }
+      }
+    };
+
+    window.addEventListener('touchstart', handleTouchStart, false);
+    window.addEventListener('touchend', handleTouchEnd, false);
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, []);
 
   return (
     <div className={styles.container}>
@@ -197,6 +240,7 @@ export default function Home() {
               onChange={(e) => setNickname(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && startGame()}
               className={styles.input}
+              autoFocus
             />
             <button onClick={startGame} className={styles.playButton}>
               Oynamaya Başla
@@ -265,7 +309,7 @@ export default function Home() {
           )}
 
           <div className={styles.controls}>
-            <p>Kontroller: ⬆️ ⬇️ ⬅️ ➡️ Tuşları Kullanın</p>
+            <p>⌨️ Ok Tuşları • 👆 Kaydır (Mobil)</p>
           </div>
         </div>
       )}
